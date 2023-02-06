@@ -24,8 +24,12 @@
 package de.flapdoodle.embed.process.net;
 
 import de.flapdoodle.embed.process.HttpServers;
+import de.flapdoodle.embed.process.config.TimeoutConfig;
 import de.flapdoodle.embed.process.net.UrlStreams.DownloadCopyListener;
 import de.flapdoodle.embed.process.runtime.Network;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import fi.iki.elonen.NanoHTTPD;
 import org.junit.Test;
 
 import java.io.File;
@@ -56,6 +60,7 @@ public class UrlStreamsTest {
 		Files.delete(destination);
 		
 		try (HttpServers.Server server = HttpServers.httpServer(httpPort, (session) -> Optional.empty())) {
+			// connection is not used, downloadMock fakes the download
 			URLConnection connection = new URL("http://localhost:123/toLong?foo=bar").openConnection();
 			UrlStreams.downloadTo(connection, destination, url -> {
 				Path downloadMock = Files.createTempFile("moveThis", "");
@@ -235,6 +240,50 @@ public class UrlStreamsTest {
 				assertEquals("contentLength", content.length, downloadContentLength);
 			});
 		}
+	}
+
+	@Test
+	public void downloadShouldWorkWithProxyServer() throws IOException {
+		int httpPort = Network.getFreeServerPort();
+		long contentLengt = 2*1024*1024;
+		byte[] content = randomFilledByteArray((int) contentLengt);
+
+		Path destination = Files.createTempFile("moveToThisFile", "");
+		Files.delete(destination);
+
+		HttpServers.Listener listener=(session) -> {
+			assertThat(session.getHeaders().get("proxy-authorization")).isNotNull();
+
+			if (session.getUri().equals("http://localhost:123/byProxy")) {
+				return Optional.of(HttpServers.response(200, "text/text", content));
+			}
+			return Optional.empty();
+		};
+
+		try (HttpServers.Server server = HttpServers.httpServer(httpPort, listener)) {
+			URLConnection connection = UrlStreams.urlConnectionOf(new URL("http://localhost:123/byProxy?foo=bar"),
+				"Dummy",
+				TimeoutConfig.defaults(),
+				Optional.of(HttpProxyWithBasicAuthFactory.builder()
+					.hostName("localhost")
+					.port(httpPort)
+						.username("user")
+						.password("passwd")
+					.build()
+					.createProxy()));
+			UrlStreams.downloadTo(connection, destination, (url, bytesCopied, downloadContentLength) -> {
+					assertEquals("contentLength", content.length, downloadContentLength);
+				});
+		}
+
+		File asFile = destination.toFile();
+		assertTrue(asFile.exists());
+		assertTrue(asFile.isFile());
+
+		byte[] transferedBytes = Files.readAllBytes(destination);
+		assertSameContent(content, transferedBytes);
+
+		Files.delete(destination);
 	}
 
 	private void assertSameContent(byte[] expected, byte[] result) {

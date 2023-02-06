@@ -36,6 +36,7 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.Optional;
 
 public abstract class UrlStreams {
@@ -92,7 +93,19 @@ public abstract class UrlStreams {
 		URLConnection openConnection = Optionals.with(proxy)
 			.map(url::openConnection)
 			.orElseGet(url::openConnection);
-		
+
+		proxy.ifPresent(it -> {
+			if (it instanceof ProxyWithBasicAuth) {
+				ProxyWithBasicAuth withBasicAuth = (ProxyWithBasicAuth) it;
+				String authHeader = new String(Base64.getEncoder().encode((withBasicAuth.username() + ":" + withBasicAuth.password()).getBytes()));
+				openConnection.setRequestProperty("Proxy-Authorization", "Basic " + authHeader);
+			}
+		});
+
+		if ("https".equals(url.getProtocol()) && proxy.isPresent()) {
+			throw new RuntimeException("https connection over http proxy is not implemented");
+		}
+
 		openConnection.setRequestProperty("User-Agent",userAgent);
 		openConnection.setConnectTimeout(timeoutConfig.getConnectionTimeout());
 		openConnection.setReadTimeout(timeoutConfig.getReadTimeout());
